@@ -537,7 +537,7 @@
         drawGates();
         drawBall();
         drawVectors();
-        if(showTimeInfo) timeValueElement.textContent = `${elapsedTime.toFixed(2)}`;
+        if(showTimeInfo) timeValueElement.textContent = `${elapsedTime.toFixed(3)}`;
     }
 
 
@@ -853,8 +853,27 @@
             ball.y = floorY - BALL_RADIUS; isRunning = false;
             runBtn.innerHTML = '🏁 Finalizado'; runBtn.disabled = true;
             
+            // AJUSTE: Cálculo analítico para caída libre ideal (sin rozamiento)
+            if (dragCoefficient_b === 0) {
+                // Usamos las fórmulas exactas para evitar errores de la integración numérica
+                const h = RULER_HEIGHT_M;
+                const v0 = initialVelocity;
+                
+                // v_f^2 = v_0^2 + 2*g*h
+                const exactFinalVelocity = Math.sqrt(v0**2 + 2 * g * h);
+                // v_f = v_0 + g*t  => t = (v_f - v_0) / g
+                const exactTime = (exactFinalVelocity - v0) / g;
+
+                elapsedTime = exactTime; // Sobreescribimos con el tiempo exacto
+                ball.vy = exactFinalVelocity; // Sobreescribimos con la velocidad exacta
+            }
+            
             if (showGraphs) {
                 const finalHeight = invertRuler ? RULER_HEIGHT_M : 0;
+                // Eliminamos el último punto de la simulación si existe, para reemplazarlo por el final exacto.
+                if (simulationData.length > 0 && simulationData[simulationData.length - 1].height > finalHeight) {
+                    simulationData.pop();
+                }
                 simulationData.push({ time: elapsedTime, height: finalHeight, velocity: ball.vy });
                 renderDataTable();
                 dataTableContainer.scrollTop = dataTableContainer.scrollHeight;
