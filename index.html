@@ -100,9 +100,9 @@
                     <input type="range" id="rulerHeightSlider" value="200" min="1" max="5000" step="1">
                 </div>
                  <div id="initialVelocityContainer" class="opacity-50 transition-opacity">
-                     <label for="initialVelocitySlider" class="block font-medium text-gray-400 mb-2">Velocidad Inicial (v₀): <output id="initialVelocityValue" class="font-bold text-indigo-300">0.0</output> m/s</label>
-                     <input type="range" id="initialVelocitySlider" value="0" min="0" max="40" step="0.1" disabled>
-                </div>
+                      <label for="initialVelocitySlider" class="block font-medium text-gray-400 mb-2">Velocidad Inicial (v₀): <output id="initialVelocityValue" class="font-bold text-indigo-300">0.0</output> m/s</label>
+                      <input type="range" id="initialVelocitySlider" value="0" min="0" max="40" step="0.1" disabled>
+                 </div>
                 <div>
                     <label for="planetSelector" class="block font-medium text-gray-400 mb-1">Lugar</label>
                     <select id="planetSelector" class="w-full text-white text-sm rounded-md p-2.5 focus:ring-indigo-500 focus:border-indigo-500">
@@ -225,32 +225,30 @@
     const timeValueElement = document.getElementById('time-value');
     const infoPanel = document.getElementById('info-panel');
     
-    // Variable para controlar el reinicio en scroll de móvil
     let lastCanvasWidth = 0;
+    let simulationHasRun = false; 
 
     function resizeCanvas() {
         const currentWidth = canvasContainer.offsetWidth;
 
-        // Si la simulación está en marcha y es un scroll de móvil (el ancho no ha cambiado),
-        // evitamos el reinicio para no perder los datos. El pequeño cambio de altura es aceptable.
         if (isRunning && Math.abs(currentWidth - lastCanvasWidth) < 5) {
-            console.log("Scroll de móvil detectado durante la simulación. Reinicio ignorado.");
             return;
         }
 
-        // Para todos los demás casos (simulación no iniciada, o un cambio de tamaño real como girar el dispositivo),
-        // se realiza un redibujado y reinicio completo.
         canvas.width = canvasContainer.offsetWidth * window.devicePixelRatio;
         canvas.height = canvasContainer.offsetHeight * window.devicePixelRatio;
         canvas.style.width = `${canvasContainer.offsetWidth}px`;
         canvas.style.height = `${canvasContainer.offsetHeight}px`;
         ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
         
-        if (canvasContainer.offsetWidth > 0) {
-            fullReset();
+        if (simulationHasRun && !isRunning) {
+            redrawFinalState();
+        } else {
+            if (canvasContainer.offsetWidth > 0) {
+                fullReset();
+            }
         }
 
-        // Actualizamos el último ancho conocido para el próximo evento de redimensionado.
         lastCanvasWidth = currentWidth;
     }
 
@@ -286,9 +284,14 @@
     let BALL_RADIUS, GATE_HEIGHT, GATE_WIDTH;
 
     let g, RULER_HEIGHT_M, PIXELS_PER_METER, initialVelocity, showHeightInfo, showTimeInfo, invertRuler, showGraphs, showVectors, dragCoefficient_b;
-    let ball, gates, xtChart, vtChart, clouds = [], stars = [], mountainRanges = [], simulationData = [];
+    let ball, xtChart, vtChart, clouds = [], stars = [], mountainRanges = [], simulationData = [];
     let isRunning = false, lastTime = 0, elapsedTime = 0, animationFrameId, nextRecordTime = 1.0;
     
+    let gates = [
+        { yFraction: 0.2, y: 0, speed: null, isDragging: false },
+        { yFraction: 0.7, y: 0, speed: null, isDragging: false }
+    ];
+
     const lerp = (a, b, t) => a + (b - a) * t;
     const interpolateColor = (color1, color2, factor) => {
         const r = Math.round(lerp(color1[0], color2[0], factor));
@@ -319,7 +322,7 @@
     function createCharts() {
         if (xtChart) xtChart.destroy();
         xtChart = new Chart(xtChartCtx, { type: 'line', data: { datasets: [{ data: [], borderColor: '#a78bfa', borderWidth: 2.5, pointRadius: 0, tension: 0.1 }] },
-            options: { ...chartOptions, scales: { ...chartOptions.scales, y: { ...chartOptions.scales.y, title: { ...chartOptions.scales.y.title, text: 'Posición (m)' } } } }
+            options: { ...chartOptions, scales: { ...chartOptions.scales, y: { ...chartOptions.scales.y, title: { ...chartOptions.scales.y.title, text: 'Altura (m)' } } } }
         });
         if (vtChart) vtChart.destroy();
         vtChart = new Chart(vtChartCtx, { type: 'line', data: { datasets: [{ data: [], borderColor: '#c4b5fd', borderWidth: 2.5, pointRadius: 0 }] },
@@ -448,16 +451,12 @@
         analysisContainer.style.display = showGraphs ? 'block' : 'none';
 
         ball = { y: RULER_Y_START, vy: initialVelocity, initialY: RULER_Y_START };
-        if (!gates) { 
-            gates = [ 
-                { y: RULER_Y_START + (RULER_PIXEL_HEIGHT * 0.2), speed: null, isDragging: false }, 
-                { y: RULER_Y_START + (RULER_PIXEL_HEIGHT * 0.7), speed: null, isDragging: false } 
-            ]; 
-        } else {
-            gates[0].y = RULER_Y_START + (RULER_PIXEL_HEIGHT * 0.2);
-            gates[1].y = RULER_Y_START + (RULER_PIXEL_HEIGHT * 0.7);
-        }
-        gates.forEach(gate => gate.speed = null);
+        
+        gates.forEach(gate => {
+            gate.y = RULER_Y_START + gate.yFraction * RULER_PIXEL_HEIGHT;
+            gate.speed = null;
+        });
+
         elapsedTime = 0;
         nextRecordTime = 1.0;
         runBtn.disabled = false; runBtn.innerHTML = 'Lanzar';
@@ -471,6 +470,8 @@
         setupMountainRanges();
         if (!animationFrameId) {
             gameLoop();
+        } else {
+            drawStaticScene();
         }
     }
 
@@ -488,6 +489,57 @@
         simulationData.push({ time: 0, height: initialHeight, velocity: initialVelocity });
         renderDataTable();
     }
+
+    function redrawFinalState() {
+        const w = canvasContainer.offsetWidth;
+        const h = canvasContainer.offsetHeight;
+        RULER_PIXEL_HEIGHT = h * 0.85;
+        RULER_Y_START = h * 0.075;
+        RULER_X = w * 0.35;
+        RULER_WIDTH = w * 0.04;
+        BALL_RADIUS = Math.max(10, w * 0.02);
+        GATE_HEIGHT = h * 0.035;
+        GATE_WIDTH = w * 0.12;
+
+        PIXELS_PER_METER = RULER_PIXEL_HEIGHT / RULER_HEIGHT_M;
+
+        ball.y = (RULER_Y_START + RULER_PIXEL_HEIGHT) - BALL_RADIUS;
+
+        gates.forEach(gate => {
+            gate.y = RULER_Y_START + gate.yFraction * RULER_PIXEL_HEIGHT;
+        });
+
+        setupClouds();
+        setupStars();
+        setupMountainRanges();
+
+        if (showGraphs) {
+            createCharts();
+            if(simulationData.length > 0) {
+                xtChart.data.datasets[0].data = simulationData.map(d => ({x: d.time, y: d.height}));
+                vtChart.data.datasets[0].data = simulationData.map(d => ({x: d.time, y: d.velocity}));
+                xtChart.update('none'); 
+                vtChart.update('none');
+            }
+            renderDataTable();
+        }
+        
+        drawStaticScene();
+    }
+
+    function drawStaticScene() {
+        ctx.clearRect(0,0,canvas.width, canvas.height);
+        drawSky();
+        drawMountains();
+        drawClouds();
+        drawGrass();
+        drawRuler();
+        drawGates();
+        drawBall();
+        drawVectors();
+        if(showTimeInfo) timeValueElement.textContent = `${elapsedTime.toFixed(2)}`;
+    }
+
 
     function drawSky() {
         const w = canvasContainer.offsetWidth;
@@ -777,20 +829,18 @@
         
         const floorY = RULER_Y_START + RULER_PIXEL_HEIGHT;
 
+        const currentHeight = invertRuler ? (ball.y - RULER_Y_START) / PIXELS_PER_METER : RULER_HEIGHT_M - (ball.y - RULER_Y_START) / PIXELS_PER_METER;
+
         if (showGraphs && elapsedTime >= nextRecordTime) {
-            const currentHeight = invertRuler ? (ball.y - RULER_Y_START) / PIXELS_PER_METER : RULER_HEIGHT_M - (ball.y - RULER_Y_START) / PIXELS_PER_METER;
             simulationData.push({ time: elapsedTime, height: Math.max(0, currentHeight), velocity: ball.vy });
             renderDataTable();
             nextRecordTime += 1.0;
         }
 
         if (showGraphs) {
-            const currentPosition = (ball.y - RULER_Y_START) / PIXELS_PER_METER;
-            if (currentPosition >= 0) {
-                xtChart.data.datasets[0].data.push({x: elapsedTime, y: currentPosition});
-                vtChart.data.datasets[0].data.push({x: elapsedTime, y: ball.vy});
-                xtChart.update('none'); vtChart.update('none');
-            }
+            xtChart.data.datasets[0].data.push({x: elapsedTime, y: Math.max(0, currentHeight)});
+            vtChart.data.datasets[0].data.push({x: elapsedTime, y: ball.vy});
+            xtChart.update('none'); vtChart.update('none');
         }
 
         gates.forEach(gate => {
@@ -813,38 +863,42 @@
     }
     
     function gameLoop(time) {
-        if (!isRunning) lastTime = 0;
+        if (!isRunning) {
+            lastTime = 0;
+            clouds.forEach(cloud => {
+                cloud.x += cloud.speed;
+                if (cloud.x - cloud.radius > canvasContainer.offsetWidth) cloud.x = -cloud.radius * 2.5;
+            });
+            drawStaticScene();
+            animationFrameId = requestAnimationFrame(gameLoop);
+            return;
+        };
         
         clouds.forEach(cloud => {
             cloud.x += cloud.speed;
             if (cloud.x - cloud.radius > canvasContainer.offsetWidth) cloud.x = -cloud.radius * 2.5;
         });
         
-        if (isRunning) {
-            if (lastTime === 0) { lastTime = time; }
-            const deltaTime = (time - lastTime) / 1000;
-            lastTime = time;
-            if (deltaTime > 0 && deltaTime < 0.1) {
-                 updatePhysics(deltaTime);
-            }
+        if (lastTime === 0) { lastTime = time; }
+        const deltaTime = (time - lastTime) / 1000;
+        lastTime = time;
+        if (deltaTime > 0 && deltaTime < 0.1) {
+             updatePhysics(deltaTime);
         }
         
-        ctx.clearRect(0,0,canvas.width, canvas.height);
-        drawSky();
-        drawMountains();
-        drawClouds();
-        drawGrass();
-        drawRuler();
-        drawGates();
-        drawBall();
-        drawVectors();
-        if(showTimeInfo) timeValueElement.textContent = `${elapsedTime.toFixed(2)}`;
+        drawStaticScene();
 
         animationFrameId = requestAnimationFrame(gameLoop);
     }
     
+    function handleParamChange() {
+        simulationHasRun = false;
+        fullReset();
+    }
+    
     runBtn.addEventListener('click', () => { 
         if (isRunning) return; 
+        simulationHasRun = true;
         resetFallState(); 
         isRunning = true; 
         rulerHeightSlider.disabled = true;
@@ -853,11 +907,11 @@
         airResistanceSelector.disabled = true;
     });
     
-    resetBtn.addEventListener('click', fullReset);
-    planetSelector.addEventListener('change', fullReset);
-    airResistanceSelector.addEventListener('change', fullReset);
+    resetBtn.addEventListener('click', handleParamChange);
+    planetSelector.addEventListener('change', handleParamChange);
+    airResistanceSelector.addEventListener('change', handleParamChange);
     rulerHeightSlider.addEventListener('input', () => { heightValueOutput.textContent = rulerHeightSlider.value; });
-    rulerHeightSlider.addEventListener('change', fullReset);
+    rulerHeightSlider.addEventListener('change', handleParamChange);
     
     initialVelocityCheckbox.addEventListener('change', () => {
         const isEnabled = initialVelocityCheckbox.checked;
@@ -867,14 +921,14 @@
             initialVelocitySlider.value = 0;
             initialVelocityValue.textContent = '0.0';
         }
-        fullReset();
+        handleParamChange();
     });
     initialVelocitySlider.addEventListener('input', () => {
         initialVelocityValue.textContent = parseFloat(initialVelocitySlider.value).toFixed(1);
     });
-    initialVelocitySlider.addEventListener('change', fullReset);
+    initialVelocitySlider.addEventListener('change', handleParamChange);
 
-    invertRulerCheckbox.addEventListener('change', fullReset);
+    invertRulerCheckbox.addEventListener('change', handleParamChange);
     showGraphsCheckbox.addEventListener('change', () => { 
         showGraphs = showGraphsCheckbox.checked; 
         analysisContainer.style.display = showGraphs ? 'block' : 'none'; 
@@ -927,9 +981,9 @@
         infoPopup.classList.add('hidden');
     });
      infoPopup.addEventListener('click', (e) => {
-        if (e.target === infoPopup) {
-            infoPopup.classList.add('hidden');
-        }
+         if (e.target === infoPopup) {
+             infoPopup.classList.add('hidden');
+         }
     });
 
 
@@ -957,6 +1011,7 @@
         const pos = getEventPosition(e); 
         const rulerEnd = RULER_Y_START + RULER_PIXEL_HEIGHT; 
         activeGate.y = Math.max(RULER_Y_START, Math.min(pos.y, rulerEnd)); 
+        activeGate.yFraction = (activeGate.y - RULER_Y_START) / RULER_PIXEL_HEIGHT;
         resetFallState(); 
     }
     function onDragEnd(e) { 
@@ -981,4 +1036,3 @@
 
 </body>
 </html>
-
